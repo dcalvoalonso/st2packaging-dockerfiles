@@ -4,7 +4,7 @@ set -e +x -o pipefail
 
 # Set the TGT to identify the OS and version.
 TGT=$(source /etc/os-release; echo "${ID}-${VERSION_ID}")
-# e.g. ubuntu-22.04, ubuntu-24.04, debian-11, rocky-9.7, rocky-9.5, rocky-10.1 etc.
+# e.g. ubuntu-22.04, ubuntu-24.04, debian-11, rocky-9.7, rocky-9.5, rocky-10.1, rhel-9.6 etc.
 distro_unsupported()
 {
     echo "Unsupported distro $TGT" >&2
@@ -17,7 +17,7 @@ version_unsupported()
 }
 
 # Detect unsupported distribution early.
-if [[ ! "$TGT" =~ rocky|ubuntu ]]; then
+if [[ ! "$TGT" =~ rocky|rhel|ubuntu ]]; then
     distro_unsupported
 fi
 
@@ -56,6 +56,13 @@ configure_base()
             dnf -y autoremove
             dnf clean all
         ;;
+        rhel*)
+            # Red Hat UBI images are only used as test nodes; EPEL, CRB and
+            # ImageMagick are only needed on the build nodes.
+            dnf update -y
+            dnf -y install glibc-langpack-en
+            dnf clean all
+        ;;
         ubuntu*)
             # Make noninteractive setting permanent
             export DEBIAN_FRONTEND=noninteractive
@@ -81,7 +88,7 @@ configure_sshkeys()
     chmod 600 /root/.ssh/busybee
 
     case "$TGT" in
-        rocky*)
+        rocky*|rhel*)
             ssh-keygen -t ed25519 -N '' -f /etc/ssh/ssh_host_ed25519_key
         ;;
         ubuntu*)
@@ -106,7 +113,7 @@ configure_sshkeys()
 install_locale()
 {
     case "$TGT" in
-        rocky*)
+        rocky*|rhel*)
             PKGS=(
                 nc
                 net-tools
@@ -136,7 +143,7 @@ install_locale()
 install_download_tools()
 {
     case "$TGT" in
-        rocky*)
+        rocky*|rhel*)
             PKGS=(
                 ca-certificates
                 iproute
@@ -194,6 +201,20 @@ configure_testing_system()
             # https://github.com/docker-library/docs/tree/master/centos#package-documentation
             sed -i '/nodocs/d' /etc/yum.conf
         ;;
+        rhel*)
+            cd /lib/systemd/system/sysinit.target.wants/
+            ls -1 | grep -v systemd-tmpfiles-setup.service | xargs -r rm
+            rm -f /etc/systemd/system/*.wants/*
+            rm -f /lib/systemd/system/local-fs.target.wants/*
+            rm -f /lib/systemd/system/sockets.target.wants/*udev*
+            rm -f /lib/systemd/system/sockets.target.wants/*initctl*
+            rm -f /lib/systemd/system/basic.target.wants/*
+            systemctl preset sshd
+
+            # UBI sets tsflags=nodocs in /etc/dnf/dnf.conf (/etc/yum.conf is a symlink to it),
+            # which would drop /usr/share/doc/st2/conf/nginx/st2.conf from the st2 package.
+            sed -i '/nodocs/d' /etc/dnf/dnf.conf
+        ;;
         ubuntu*)
             # TO DO: This may be a pre-systemd relica.
             find /etc/systemd/system \
@@ -224,7 +245,7 @@ configure_testing_system()
 install_system_tools()
 {
     case "$TGT" in
-        rocky*)
+        rocky*|rhel*)
             PKGS=(
                 git
                 openssh-server
