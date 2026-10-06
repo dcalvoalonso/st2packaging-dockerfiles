@@ -26,11 +26,16 @@ function build()
 
     date_suffix=$(date +%Y-%m-%d)
 
-    echo "Building packagingbuild image..."
-    (docker build --progress plain -f "packagingbuild/${CODENAME}/Dockerfile" -t "${CODENAME}-build" -t "stackstorm/packagingbuild:${CODENAME}" -t "stackstorm/packagingbuild:${CODENAME}-${date_suffix}" .) || exit -1
+    # Some distros (e.g. rhel9) only have a packagingtest image.
+    if [[ -f "packagingbuild/${CODENAME}/Dockerfile" ]]; then
+        echo "Building packagingbuild image..."
+        (docker build --progress plain -f "packagingbuild/${CODENAME}/Dockerfile" -t "${CODENAME}-build" -t "stackstorm/packagingbuild:${CODENAME}" -t "stackstorm/packagingbuild:${CODENAME}-${date_suffix}" .) || exit -1
+    fi
 
-    echo "Building packagingtest image..."
-    (docker build --progress plain -f "packagingtest/${CODENAME}/Dockerfile" -t "${CODENAME}-test"  -t "stackstorm/packagingtest:${CODENAME}" -t "stackstorm/packagingtest:${CODENAME}-${date_suffix}" .) || exit -1
+    if [[ -f "packagingtest/${CODENAME}/Dockerfile" ]]; then
+        echo "Building packagingtest image..."
+        (docker build --progress plain -f "packagingtest/${CODENAME}/Dockerfile" -t "${CODENAME}-test"  -t "stackstorm/packagingtest:${CODENAME}" -t "stackstorm/packagingtest:${CODENAME}-${date_suffix}" .) || exit -1
+    fi
 }
 
 function build_runner()
@@ -45,10 +50,8 @@ function build_runner()
 function build_target()
 {
     local CODENAME="$1"
-    for DOCKERFILE in packagingbuild/$CODENAME/Dockerfile
+    for TARGET in $(ls -1 packagingbuild/$CODENAME/Dockerfile packagingtest/$CODENAME/Dockerfile 2>/dev/null | xargs -r -n1 dirname | xargs -r -n1 basename | sort -u)
     do
-        TARGET_PATH=$(dirname $DOCKERFILE)
-        TARGET=$(basename $TARGET_PATH)
         build $TARGET
     done
 }

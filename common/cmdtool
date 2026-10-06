@@ -4,7 +4,7 @@ set -e +x -o pipefail
 
 # Set the TGT to identify the OS and version.
 TGT=$(source /etc/os-release; echo "${ID}-${VERSION_ID}")
-# e.g. ubuntu-22.04, ubuntu-24.04, debian-11, rocky-9.7, rocky-9.5, rocky-10.1 etc.
+# e.g. ubuntu-22.04, ubuntu-24.04, debian-11, rocky-9.7, rocky-9.5, rocky-10.1, rhel-9.6 etc.
 distro_unsupported()
 {
     echo "Unsupported distro $TGT" >&2
@@ -17,7 +17,7 @@ version_unsupported()
 }
 
 # Detect unsupported distribution early.
-if [[ ! "$TGT" =~ rocky|ubuntu ]]; then
+if [[ ! "$TGT" =~ rocky|rhel|ubuntu ]]; then
     distro_unsupported
 fi
 
@@ -56,6 +56,14 @@ configure_base()
             dnf -y autoremove
             dnf clean all
         ;;
+        rhel*)
+            # Red Hat UBI images are only used as test nodes; EPEL, CRB and
+            # ImageMagick are only needed on the build nodes. hostname is part of
+            # the Rocky Linux base image but not of UBI.
+            dnf update -y
+            dnf -y install glibc-langpack-en hostname
+            dnf clean all
+        ;;
         ubuntu*)
             # Make noninteractive setting permanent
             export DEBIAN_FRONTEND=noninteractive
@@ -81,7 +89,7 @@ configure_sshkeys()
     chmod 600 /root/.ssh/busybee
 
     case "$TGT" in
-        rocky*)
+        rocky*|rhel*)
             ssh-keygen -t ed25519 -N '' -f /etc/ssh/ssh_host_ed25519_key
         ;;
         ubuntu*)
@@ -106,7 +114,7 @@ configure_sshkeys()
 install_locale()
 {
     case "$TGT" in
-        rocky*)
+        rocky*|rhel*)
             PKGS=(
                 nc
                 net-tools
@@ -136,7 +144,7 @@ install_locale()
 install_download_tools()
 {
     case "$TGT" in
-        rocky*)
+        rocky*|rhel*)
             PKGS=(
                 ca-certificates
                 iproute
@@ -192,7 +200,27 @@ configure_testing_system()
             # install doc files (/usr/share/docs) when installing yum packages
             # otherwise /usr/share/docs/st2/conf/nginx/st2.conf won't be present
             # https://github.com/docker-library/docs/tree/master/centos#package-documentation
-            sed -i '/nodocs/d' /etc/yum.conf
+            # /etc/yum.conf is a symlink to /etc/dnf/dnf.conf; sed -i would replace the
+            # symlink with a copy and leave dnf.conf unchanged, so edit dnf.conf itself.
+            sed -i '/nodocs/d' /etc/dnf/dnf.conf
+        ;;
+        rhel*)
+            cd /lib/systemd/system/sysinit.target.wants/
+            ls -1 | grep -v systemd-tmpfiles-setup.service | xargs -r rm
+            rm -f /etc/systemd/system/*.wants/*
+            rm -f /lib/systemd/system/local-fs.target.wants/*
+            rm -f /lib/systemd/system/sockets.target.wants/*udev*
+            rm -f /lib/systemd/system/sockets.target.wants/*initctl*
+            rm -f /lib/systemd/system/basic.target.wants/*
+            systemctl preset sshd
+
+            # UBI sets tsflags=nodocs in /etc/dnf/dnf.conf (/etc/yum.conf is a symlink to it),
+            # which would drop /usr/share/doc/st2/conf/nginx/st2.conf from the st2 package.
+            sed -i '/nodocs/d' /etc/dnf/dnf.conf
+
+            # systemd services get the system locale from /etc/locale.conf, which is
+            # C.utf8 on UBI; use the same UTF-8 locale as the image environment.
+            echo 'LANG=en_US.UTF-8' > /etc/locale.conf
         ;;
         ubuntu*)
             # TO DO: This may be a pre-systemd relica.
@@ -224,7 +252,7 @@ configure_testing_system()
 install_system_tools()
 {
     case "$TGT" in
-        rocky*)
+        rocky*|rhel*)
             PKGS=(
                 git
                 openssh-server
@@ -235,10 +263,13 @@ install_system_tools()
             dnf -y autoremove; dnf clean all
         ;;
         ubuntu*)
+            # uuid-runtime provides uuidgen, which is part of util-linux on EL
+            # and is used by the st2tests suite (st2-self-check).
             PKGS=(
                 git
                 openssh-server
                 sudo
+                uuid-runtime
             )
             apt -y install ${PKGS[@]}
         ;;
@@ -368,9 +399,9 @@ install_python()
 {
     # Python packages installed for all distribution types.
     COMMON_PYPKGS=(
-        "virtualenv==21.5.1"
-        "pip==26.1.2"
-        "setuptools==82.0.1"
+        "virtualenv==21.7.13"
+        "pip==26.2.1"
+        "setuptools==84.0.0"
         "wheel==0.45.1"
         build
     )
